@@ -4,8 +4,36 @@
  */
 
 /**
+ * Normalize PDF text that has extra spaces inserted
+ * pdf.js sometimes adds spaces in the middle of words
+ */
+function normalizePdfText(text) {
+  let normalized = text;
+
+  // Fix spaces around hyphens in product codes (VDP - VDURACare - 10 - HP -> VDP-VDURACare-10-HP)
+  normalized = normalized.replace(/(\w)\s+-\s+(\w)/g, '$1-$2');
+
+  // Fix split numbers (2 3 -> 23, 202 6 -> 2026)
+  normalized = normalized.replace(/(\d)\s+(\d)/g, '$1$2');
+
+  // Fix common split words
+  normalized = normalized.replace(/Quot\s+ation/gi, 'Quotation');
+  normalized = normalized.replace(/Com\s+pany/gi, 'Company');
+  normalized = normalized.replace(/cwalle\s*rt/gi, 'cwallert');
+  normalized = normalized.replace(/Q\s+TY/gi, 'QTY');
+  normalized = normalized.replace(/VDURA\s+Care/gi, 'VDURA Care');
+
+  // Fix split email addresses (xxx @ yyy -> xxx@yyy)
+  normalized = normalized.replace(/(\S+)\s+@\s+(\S+)/g, '$1@$2');
+
+  // Normalize multiple spaces to single space
+  normalized = normalized.replace(/\s+/g, ' ');
+
+  return normalized;
+}
+
+/**
  * Parse a date string to MM/DD/YYYY format
- * Handles: "January 30, 2026", "Jan 23, 2026", "01/30/2026"
  */
 function parseDate(dateStr) {
   if (!dateStr) return '';
@@ -32,7 +60,7 @@ function parseDate(dateStr) {
   };
 
   // Parse "January 30, 2026" or "Jan 23, 2026" format
-  const match = dateStr.match(/(\w+)\s+(\d{1,2}),?\s+(\d{4})/i);
+  const match = dateStr.match(/(\w+)\s*(\d{1,2})\s*,?\s*(\d{4})/i);
   if (match) {
     const month = months[match[1].toLowerCase()] || '01';
     const day = match[2].padStart(2, '0');
@@ -44,7 +72,7 @@ function parseDate(dateStr) {
 }
 
 /**
- * Parse currency string like "$500.00" or "$15,180.00" to number
+ * Parse currency string to number
  */
 function parseCurrency(str) {
   if (!str) return 0;
@@ -53,9 +81,10 @@ function parseCurrency(str) {
 
 /**
  * Extract header information from PDF text
- * Handles variations in field names and formats
  */
 export function extractHeader(text) {
+  const normalized = normalizePdfText(text);
+
   const header = {
     quoteNumber: '',
     quoteDate: '',
@@ -66,52 +95,53 @@ export function extractHeader(text) {
     email: ''
   };
 
-  // Quote Number - pattern like "Quote Number 10178-12345" or "1404-31909"
-  const quoteNumMatch = text.match(/Quote\s+Number\s+(\S+)/i);
+  // Quote Number
+  const quoteNumMatch = normalized.match(/Quote\s*Number\s*(\d+[-\d]*)/i);
   if (quoteNumMatch) {
     header.quoteNumber = quoteNumMatch[1];
   }
 
-  // Quote Date - handles "January 30, 2026" or "Jan 23, 2026"
-  const quoteDateMatch = text.match(/Quote\s+Date\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i);
+  // Quote Date
+  const quoteDateMatch = normalized.match(/Quote\s*Date\s*([A-Za-z]+\s*\d{1,2}\s*,?\s*\d{4})/i);
   if (quoteDateMatch) {
     header.quoteDate = parseDate(quoteDateMatch[1]);
   }
 
-  // Quote Expires - handles "February 13, 2026" or "Feb 6, 2026"
-  const expiresMatch = text.match(/Quote\s+Expires\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i);
+  // Quote Expires
+  const expiresMatch = normalized.match(/Quote\s*Expires\s*([A-Za-z]+\s*\d{1,2}\s*,?\s*\d{4})/i);
   if (expiresMatch) {
     header.expires = parseDate(expiresMatch[1]);
   }
 
-  // Customer Name - try multiple patterns
-  // Pattern 1: "Customer Name Test Customer"
-  let customerMatch = text.match(/Customer\s+Name\s+([^\n]+?)(?=\s+Quote|\s+Partner|\s+SOFTWARE)/i);
-  // Pattern 2: "Company Good Year"
-  if (!customerMatch || !customerMatch[1].trim()) {
-    customerMatch = text.match(/Company\s+([^\n]+?)(?=\s+Quote|\s+SOFTWARE)/i);
+  // Customer Name or Company
+  let customerMatch = normalized.match(/Customer\s*Name\s+([A-Za-z0-9\s]+?)(?=\s+Quote|\s+Partner|\s+SOFTWARE)/i);
+  if (!customerMatch) {
+    customerMatch = normalized.match(/Company\s+([A-Za-z0-9\s]+?)(?=\s+Quote|\s+SOFTWARE)/i);
   }
   if (customerMatch) {
     header.customer = customerMatch[1].trim();
   }
 
-  // Partner Name (optional - may not exist in all quotes)
-  const partnerMatch = text.match(/Partner\s+Name\s+([^\n]+?)(?=\s+SOFTWARE|\s+COMMODITY|\s+PART)/i);
+  // Partner Name (optional)
+  const partnerMatch = normalized.match(/Partner\s*Name\s+([A-Za-z0-9\s]+?)(?=\s+SOFTWARE|\s+COMMODITY)/i);
   if (partnerMatch) {
     header.partner = partnerMatch[1].trim();
   }
 
   // Prepared By
-  const preparedByMatch = text.match(/Prepared\s+By\s+([^\n]+?)(?=\s+Email|\s+Quote)/i);
+  const preparedByMatch = normalized.match(/Prepared\s*By\s+([A-Za-z\s]+?)(?=\s+Email|\s+Quote)/i);
   if (preparedByMatch) {
     header.preparedBy = preparedByMatch[1].trim();
   }
 
   // Email
-  const emailMatch = text.match(/Email\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+  const emailMatch = normalized.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
   if (emailMatch) {
     header.email = emailMatch[1];
   }
+
+  console.log('Normalized text sample:', normalized.substring(0, 500));
+  console.log('Parsed header:', header);
 
   return header;
 }
@@ -120,7 +150,8 @@ export function extractHeader(text) {
  * Extract base product code from Notes section
  */
 export function extractBaseProductCode(text) {
-  const configMatch = text.match(/V(\d+)\s+Configuration/i);
+  const normalized = normalizePdfText(text);
+  const configMatch = normalized.match(/V(\d+)\s*Configuration/i);
   if (configMatch) {
     return `v${configMatch[1]}`;
   }
@@ -129,118 +160,79 @@ export function extractBaseProductCode(text) {
 
 /**
  * Extract line items from the quotation table
- * Uses flexible patterns to handle different PDF text layouts
  */
 export function extractLineItems(text) {
   const items = [];
+  const normalized = normalizePdfText(text);
 
-  // Normalize whitespace for easier matching
-  const normalizedText = text.replace(/\s+/g, ' ');
+  console.log('=== NORMALIZED TEXT (first 1500 chars) ===');
+  console.log(normalized.substring(0, 1500));
 
   // ============================================
   // VDURACare items - HAVE months
-  // Pattern: VDP-VDURACare-10-HP ... 21 60 $500.00 $90.00 $113,400.00
+  // Pattern: VDP-VDURACare-10-HP description 21 60 $500.00 $90.00 $113,400.00
   // ============================================
-  const vduraCarePattern = /(VDP-VDURACare-\d+-[A-Z]+)/g;
+  const vduraCarePattern = /VDP-VDURACare-(\d+)-([A-Z]+)\s+(.+?)\s+(\d+)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/gi;
   let match;
-  const vduraCareMatches = [...normalizedText.matchAll(vduraCarePattern)];
 
-  for (const codeMatch of vduraCareMatches) {
-    const code = codeMatch[1];
-    const startIdx = codeMatch.index;
-    const chunk = normalizedText.substring(startIdx, startIdx + 400);
-
-    // Look for: description QTY MONTHS $LIST $DISCOUNT $EXTENDED
-    const dataMatch = chunk.match(new RegExp(
-      code.replace(/[-]/g, '[-]') +
-      '\\s+(.+?)\\s+(\\d+)\\s+(\\d+)\\s+\\$([\\d,]+\\.?\\d*)\\s+\\$([\\d,]+\\.?\\d*)\\s+\\$([\\d,]+\\.?\\d*)'
-    ));
-
-    if (dataMatch) {
-      items.push({
-        partNo: code,
-        description: cleanDescription(dataMatch[1]),
-        qty: parseInt(dataMatch[2]),
-        months: parseInt(dataMatch[3]),
-        listPrice: parseCurrency(dataMatch[4]),
-        discountPrice: parseCurrency(dataMatch[5]),
-        extendedPrice: parseCurrency(dataMatch[6])
-      });
-    }
+  while ((match = vduraCarePattern.exec(normalized)) !== null) {
+    const code = `VDP-VDURACare-${match[1]}-${match[2]}`;
+    console.log('Found VDURACare:', code, 'QTY:', match[4], 'MONTHS:', match[5]);
+    items.push({
+      partNo: code,
+      description: cleanDescription(match[3]),
+      qty: parseInt(match[4]),
+      months: parseInt(match[5]),
+      listPrice: parseCurrency(match[6]),
+      discountPrice: parseCurrency(match[7]),
+      extendedPrice: parseCurrency(match[8])
+    });
   }
 
   // ============================================
   // Service items (SVC-*) - NO months
-  // Pattern: SVC-R1-CINT-PDEP-NORACK ... 1 $15,180.00 $7,590.00 $7,590.00
+  // Pattern: SVC-R1-CINT-PDEP-NORACK description 1 $15,180.00 $7,590.00 $7,590.00
   // ============================================
-  const svcPattern = /(SVC-[A-Za-z0-9-]+)/g;
-  const svcMatches = [...normalizedText.matchAll(svcPattern)];
+  const svcPattern = /(SVC-[A-Za-z0-9-]+)\s+(.+?)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/gi;
 
-  for (const codeMatch of svcMatches) {
-    const code = codeMatch[1];
-    const startIdx = codeMatch.index;
-    const chunk = normalizedText.substring(startIdx, startIdx + 400);
-
-    // Look for: description QTY $LIST $DISCOUNT $EXTENDED (no months)
-    const dataMatch = chunk.match(new RegExp(
-      code.replace(/[-]/g, '[-]') +
-      '\\s+(.+?)\\s+(\\d+)\\s+\\$([\\d,]+\\.?\\d*)\\s+\\$([\\d,]+\\.?\\d*)\\s+\\$([\\d,]+\\.?\\d*)'
-    ));
-
-    if (dataMatch) {
-      items.push({
-        partNo: code,
-        description: cleanDescription(dataMatch[1]),
-        qty: parseInt(dataMatch[2]),
-        months: null,
-        listPrice: parseCurrency(dataMatch[3]),
-        discountPrice: parseCurrency(dataMatch[4]),
-        extendedPrice: parseCurrency(dataMatch[5])
-      });
-    }
+  while ((match = svcPattern.exec(normalized)) !== null) {
+    console.log('Found SVC:', match[1], 'QTY:', match[3]);
+    items.push({
+      partNo: match[1],
+      description: cleanDescription(match[2]),
+      qty: parseInt(match[3]),
+      months: null,
+      listPrice: parseCurrency(match[4]),
+      discountPrice: parseCurrency(match[5]),
+      extendedPrice: parseCurrency(match[6])
+    });
   }
 
   // ============================================
   // Hardware items (VCH-*) - NO months
-  // Pattern: VCH-5100-D1N ... 3 $48,618.39 $20,969.19 $62,907.57
+  // Pattern: VCH-5100-D1N description 3 $48,618.39 $20,969.19 $62,907.57
   // ============================================
-  const vchPattern = /(VCH-[A-Za-z0-9.-]+)/g;
-  const vchMatches = [...normalizedText.matchAll(vchPattern)];
+  const vchPattern = /(VCH-[A-Za-z0-9.-]+)\s+(.+?)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/gi;
   const seenVch = new Set();
 
-  for (const codeMatch of vchMatches) {
-    const code = codeMatch[1];
-
-    // Skip duplicates (same code may appear multiple times in text)
-    const key = `${code}-${codeMatch.index}`;
-
-    const startIdx = codeMatch.index;
-    const chunk = normalizedText.substring(startIdx, startIdx + 400);
-
-    // Look for: description QTY $LIST $DISCOUNT $EXTENDED (no months)
-    const dataMatch = chunk.match(new RegExp(
-      code.replace(/[-]/g, '[-]').replace(/[.]/g, '[.]') +
-      '\\s+(.+?)\\s+(\\d+)\\s+\\$([\\d,]+\\.?\\d*)\\s+\\$([\\d,]+\\.?\\d*)\\s+\\$([\\d,]+\\.?\\d*)'
-    ));
-
-    if (dataMatch) {
-      // Create unique key for deduplication
-      const itemKey = `${code}-${dataMatch[2]}-${dataMatch[6]}`;
-      if (!seenVch.has(itemKey)) {
-        seenVch.add(itemKey);
-        items.push({
-          partNo: code,
-          description: cleanDescription(dataMatch[1]),
-          qty: parseInt(dataMatch[2]),
-          months: null,
-          listPrice: parseCurrency(dataMatch[3]),
-          discountPrice: parseCurrency(dataMatch[4]),
-          extendedPrice: parseCurrency(dataMatch[5])
-        });
-      }
+  while ((match = vchPattern.exec(normalized)) !== null) {
+    const itemKey = `${match[1]}-${match[3]}-${match[6]}`;
+    if (!seenVch.has(itemKey)) {
+      seenVch.add(itemKey);
+      console.log('Found VCH:', match[1], 'QTY:', match[3]);
+      items.push({
+        partNo: match[1],
+        description: cleanDescription(match[2]),
+        qty: parseInt(match[3]),
+        months: null,
+        listPrice: parseCurrency(match[4]),
+        discountPrice: parseCurrency(match[5]),
+        extendedPrice: parseCurrency(match[6])
+      });
     }
   }
 
+  console.log('Total items found:', items.length);
   return items;
 }
 
