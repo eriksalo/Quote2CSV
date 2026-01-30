@@ -1,28 +1,26 @@
 // VDURACare child item definitions
-// Each VDURACare parent generates these child items
+// Support prices are fixed; Software price = parent discount price - support price
 
 export const VDURACARE_CHILDREN = {
   HP: {
     software: {
       code: 'VDP-SW-P-10-HP',
-      price: 77.00,
       description: 'VDURA Data Platform – Physical, 10TB, High Performance Tier, One Month Subscription Term'
     },
     support: {
       code: 'HW-Support-HP-NBD',
-      price: 3.00,
+      fixedPrice: 3.00,  // Always $3.00
       description: 'VDURA Care – Physical 10TB, High Performance Tier, Basic Support'
     }
   },
   C: {
     software: {
       code: 'VDP-SW-P-10-C',
-      price: 9.70,
       description: 'VDURA Data Platform – Physicial, 10TB, Capacity Tier, One Month Subscription Term'
     },
     support: {
       code: 'HW-Support-C-NBD',
-      price: 0.30,
+      fixedPrice: 0.30,  // Always $0.30
       description: 'VDURA Care – Physical 10TB, Capacity Tier, Basic Support'
     }
   }

@@ -36,23 +36,32 @@ export function transformData(header, lineItems, opportunityId, baseProductCode 
       rows.push(createRow(header, item, opportunityId, baseProductCode, null));
 
       if (childDefs) {
-        // Add software child
-        rows.push(createChildRow(
+        // Calculate child prices based on parent's discount price
+        const parentDiscountPrice = item.discountPrice;
+        const supportPrice = childDefs.support.fixedPrice;
+        const softwarePrice = parentDiscountPrice - supportPrice;
+
+        // Add software child (price = parent discount price - support price)
+        rows.push(createVduraCareChildRow(
           header,
           item,
           opportunityId,
           baseProductCode,
-          childDefs.software,
+          childDefs.software.code,
+          childDefs.software.description,
+          softwarePrice,
           item.partNo
         ));
 
-        // Add support child
-        rows.push(createChildRow(
+        // Add support child (fixed price)
+        rows.push(createVduraCareChildRow(
           header,
           item,
           opportunityId,
           baseProductCode,
-          childDefs.support,
+          childDefs.support.code,
+          childDefs.support.description,
+          supportPrice,
           item.partNo
         ));
       }
@@ -97,13 +106,22 @@ function createRow(header, item, opportunityId, baseProductCode, parentProductCo
 
 /**
  * Create a child row for VDURACare items
- * Child rows inherit QTY and MONTHS from parent
- * Extended price = child price × QTY × MONTHS
+ *
+ * For HP tier:
+ *   - HW-Support-HP-NBD: fixed price $3.00
+ *   - VDP-SW-P-10-HP: price = parent discount price - $3.00
+ *
+ * For C tier:
+ *   - HW-Support-C-NBD: fixed price $0.30
+ *   - VDP-SW-P-10-C: price = parent discount price - $0.30
+ *
+ * List Price = Discount Price (0% discount on children)
+ * Extended Price = price × QTY × MONTHS
  */
-function createChildRow(header, parentItem, opportunityId, baseProductCode, childDef, parentProductCode) {
+function createVduraCareChildRow(header, parentItem, opportunityId, baseProductCode, childCode, childDescription, childPrice, parentProductCode) {
   const qty = parentItem.qty;
   const months = parentItem.months || 1;
-  const extendedPrice = childDef.price * qty * months;
+  const extendedPrice = childPrice * qty * months;
 
   return {
     quoteDate: header.quoteDate,
@@ -115,15 +133,15 @@ function createChildRow(header, parentItem, opportunityId, baseProductCode, chil
     quoteNumber: header.quoteNumber,
     baseProductCode: baseProductCode,
     baseDescription: BASE_DESCRIPTION,
-    productCode: childDef.code,
+    productCode: childCode,
     parentProductCode: parentProductCode,
-    listPrice: formatPrice(childDef.price),
-    discountPercentage: formatPrice(0), // Children have 0% discount
-    discountPrice: formatPrice(childDef.price), // Same as list price
+    listPrice: formatPrice(childPrice),        // List = Discount (no discount)
+    discountPercentage: formatPrice(0),        // 0% discount
+    discountPrice: formatPrice(childPrice),    // Calculated price
     optionQty: qty,
     month: months,
     extendedPrice: formatPrice(extendedPrice),
-    optionDescription: childDef.description,
+    optionDescription: childDescription,
     quoteExpires: header.expires,
     status: DEFAULT_STATUS
   };
