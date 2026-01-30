@@ -57,6 +57,10 @@ function App() {
       setStatus('success');
       setMessage(`Successfully converted! Downloaded ${filename} with ${rows.length} rows.`);
 
+      // Clear form for next conversion
+      setFile(null);
+      setOpportunityId('');
+
     } catch (error) {
       console.error('Conversion error:', error);
       setStatus('error');
