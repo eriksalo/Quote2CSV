@@ -3,9 +3,44 @@
  */
 
 /**
+ * Parse a date string like "January 30, 2026" to "01/30/2026"
+ */
+function parseDate(dateStr) {
+  if (!dateStr) return '';
+
+  // If already in MM/DD/YYYY format
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateStr)) {
+    return dateStr;
+  }
+
+  // Parse "January 30, 2026" format
+  const months = {
+    'january': '01', 'february': '02', 'march': '03', 'april': '04',
+    'may': '05', 'june': '06', 'july': '07', 'august': '08',
+    'september': '09', 'october': '10', 'november': '11', 'december': '12'
+  };
+
+  const match = dateStr.match(/(\w+)\s+(\d{1,2}),?\s+(\d{4})/i);
+  if (match) {
+    const month = months[match[1].toLowerCase()] || '01';
+    const day = match[2].padStart(2, '0');
+    const year = match[3];
+    return `${month}/${day}/${year}`;
+  }
+
+  return dateStr;
+}
+
+/**
+ * Parse currency string like "$500.00" or "$15,180.00" to number
+ */
+function parseCurrency(str) {
+  if (!str) return 0;
+  return parseFloat(str.replace(/[$,]/g, '')) || 0;
+}
+
+/**
  * Extract header information from PDF text
- * @param {string} text - Raw PDF text
- * @returns {Object} - Header data
  */
 export function extractHeader(text) {
   const header = {
@@ -18,52 +53,46 @@ export function extractHeader(text) {
     email: ''
   };
 
-  // Quote Number - look for pattern like "10178-12345" or similar
-  const quoteNumMatch = text.match(/Quote\s*(?:Number|#|No\.?)?\s*[:\s]*(\d+(?:-\d+)?)/i);
+  // Quote Number - pattern like "Quote Number 10178-12345"
+  const quoteNumMatch = text.match(/Quote\s+Number\s+(\S+)/i);
   if (quoteNumMatch) {
     header.quoteNumber = quoteNumMatch[1];
   }
 
-  // Date patterns - look for "Date: MM/DD/YYYY" or similar
-  const dateMatch = text.match(/Date[:\s]+(\d{1,2}\/\d{1,2}\/\d{4})/i);
-  if (dateMatch) {
-    header.quoteDate = dateMatch[1];
+  // Quote Date - pattern like "Quote Date January 30, 2026"
+  const quoteDateMatch = text.match(/Quote\s+Date\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i);
+  if (quoteDateMatch) {
+    header.quoteDate = parseDate(quoteDateMatch[1]);
   }
 
-  // Expires pattern
-  const expiresMatch = text.match(/Expires[:\s]+(\d{1,2}\/\d{1,2}\/\d{4})/i);
+  // Quote Expires - pattern like "Quote Expires February 13, 2026"
+  const expiresMatch = text.match(/Quote\s+Expires\s+([A-Za-z]+\s+\d{1,2},?\s+\d{4})/i);
   if (expiresMatch) {
-    header.expires = expiresMatch[1];
+    header.expires = parseDate(expiresMatch[1]);
   }
 
-  // Customer - look for "Customer:" or "Customer Name:"
-  const customerMatch = text.match(/Customer(?:\s*Name)?[:\s]+([^\n\r]+?)(?=\s*(?:Partner|Prepared|Email|Date|$))/i);
+  // Customer Name
+  const customerMatch = text.match(/Customer\s+Name\s+([^\n]+?)(?=\s+Quote\s+)/i);
   if (customerMatch) {
     header.customer = customerMatch[1].trim();
   }
 
-  // Partner - look for "Partner:" or "Partner Name:"
-  const partnerMatch = text.match(/Partner(?:\s*Name)?[:\s]+([^\n\r]+?)(?=\s*(?:Customer|Prepared|Email|Date|$))/i);
+  // Partner Name
+  const partnerMatch = text.match(/Partner\s+Name\s+([^\n]+?)(?=\s+SOFTWARE|\s+COMMODITY|\s+PART)/i);
   if (partnerMatch) {
     header.partner = partnerMatch[1].trim();
   }
 
   // Prepared By
-  const preparedByMatch = text.match(/Prepared\s*By[:\s]+([^\n\r]+?)(?=\s*(?:Email|Date|Customer|Partner|$))/i);
+  const preparedByMatch = text.match(/Prepared\s+By\s+([^\n]+?)(?=\s+Email)/i);
   if (preparedByMatch) {
     header.preparedBy = preparedByMatch[1].trim();
   }
 
-  // Email - look for email pattern
-  const emailMatch = text.match(/Email[:\s]+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+  // Email
+  const emailMatch = text.match(/Email\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
   if (emailMatch) {
     header.email = emailMatch[1];
-  } else {
-    // Try to find any email in the text near "Prepared By"
-    const anyEmailMatch = text.match(/([a-zA-Z0-9._%+-]+@vdura\.com)/i);
-    if (anyEmailMatch) {
-      header.email = anyEmailMatch[1];
-    }
   }
 
   return header;
@@ -71,194 +100,200 @@ export function extractHeader(text) {
 
 /**
  * Extract base product code from Notes section
- * @param {string} text - Raw PDF text
- * @returns {string} - Base product code (e.g., "v5000")
  */
 export function extractBaseProductCode(text) {
-  // Look for V5000 Configuration or similar in Notes
-  const configMatch = text.match(/V(\d+)\s*Configuration/i);
+  const configMatch = text.match(/V(\d+)\s+Configuration/i);
   if (configMatch) {
     return `v${configMatch[1]}`;
   }
-  return 'v5000'; // default
+  return 'v5000';
 }
 
 /**
  * Extract line items from the quotation table
- * @param {string} text - Raw PDF text
- * @returns {Array} - Array of line item objects
+ * This parses the specific VDURA PDF format
  */
 export function extractLineItems(text) {
   const items = [];
 
-  // Pattern to match line items in the table
-  // Part No | Description | QTY | Months | List Price | Discounted Price | Extended Price
+  // The PDF has two sections:
+  // 1. SOFTWARE AND SUPPORT (items have QTY, MONTHS, LIST PRICE, DISCOUNTED PRICE, EXTENDED PRICE)
+  // 2. COMMODITY HARDWARE (items have QTY, [MONTHS optional], LIST PRICE, DISCOUNTED PRICE, EXTENDED PRICE)
 
-  // First, try to find product codes and their associated data
-  // Common product code patterns: VDP-*, VCH-*, SVC-*, HW-*
-  const productCodePattern = /\b(VDP-[A-Za-z0-9-]+|VCH-[A-Za-z0-9-]+|SVC-[A-Za-z0-9-]+|HW-[A-Za-z0-9-]+)\b/g;
+  // Split into software and hardware sections
+  const softwareSection = text.match(/SOFTWARE AND SUPPORT.*?(?=COMMODITY HARDWARE|Total Software)/is);
+  const hardwareSection = text.match(/COMMODITY HARDWARE.*?(?=Total Hardware|Quote Cost|Notes)/is);
 
-  let match;
-  const productCodes = [];
-  while ((match = productCodePattern.exec(text)) !== null) {
-    productCodes.push({
-      code: match[1],
-      index: match.index
-    });
+  if (softwareSection) {
+    const softwareItems = extractItemsFromSection(softwareSection[0], true);
+    items.push(...softwareItems);
   }
 
-  // For each product code, try to extract the associated data
-  // We'll look for patterns of numbers that follow the product code
-  for (const { code, index } of productCodes) {
-    // Get a chunk of text around the product code
-    const chunk = text.substring(index, index + 500);
-
-    // Look for the description and numeric values
-    // Pattern: code ... description ... qty months listPrice discountPrice extendedPrice
-
-    // Try to extract numeric values (looking for currency and quantity patterns)
-    const numbersPattern = /\$?([\d,]+\.?\d*)/g;
-    const numbers = [];
-    let numMatch;
-    const chunkAfterCode = chunk.substring(code.length);
-
-    while ((numMatch = numbersPattern.exec(chunkAfterCode)) !== null) {
-      const val = parseFloat(numMatch[1].replace(/,/g, ''));
-      if (!isNaN(val)) {
-        numbers.push(val);
-      }
-    }
-
-    // We expect: QTY, Months (optional), List Price, Discounted Price, Extended Price
-    // Minimum 4 numbers for a valid line item
-    if (numbers.length >= 4) {
-      // Try to find description - text between product code and first number
-      let description = '';
-      const descMatch = chunkAfterCode.match(/^[\s,]*([^$\d]+?)(?=\s*\d)/);
-      if (descMatch) {
-        description = descMatch[1].trim()
-          .replace(/\s+/g, ' ')
-          .replace(/^[,\s]+/, '')
-          .replace(/[,\s]+$/, '');
-      }
-
-      // Determine if this item has months (subscription items)
-      // VDURACare items have months, hardware items typically don't
-      const isSubscription = code.includes('VDURACare');
-
-      let qty, months, listPrice, discountPrice, extendedPrice;
-
-      if (isSubscription && numbers.length >= 5) {
-        // Subscription item: QTY, Months, List, Discount, Extended
-        [qty, months, listPrice, discountPrice, extendedPrice] = numbers.slice(0, 5);
-      } else if (numbers.length >= 4) {
-        // Non-subscription: QTY, List, Discount, Extended (no months)
-        qty = numbers[0];
-        months = null;
-        listPrice = numbers[1];
-        discountPrice = numbers[2];
-        extendedPrice = numbers[3];
-      }
-
-      // Only add if we have valid data
-      if (qty && listPrice !== undefined && discountPrice !== undefined && extendedPrice !== undefined) {
-        items.push({
-          partNo: code,
-          description: description || code,
-          qty: qty,
-          months: months,
-          listPrice: listPrice,
-          discountPrice: discountPrice,
-          extendedPrice: extendedPrice
-        });
-      }
-    }
+  if (hardwareSection) {
+    const hardwareItems = extractItemsFromSection(hardwareSection[0], false);
+    items.push(...hardwareItems);
   }
 
-  // Remove duplicates (same product code might be captured multiple times)
-  const seen = new Set();
-  return items.filter(item => {
-    const key = `${item.partNo}-${item.qty}-${item.extendedPrice}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return items;
 }
 
 /**
- * Alternative extraction using more structured approach
- * Parses text looking for tabular data patterns
+ * Extract items from a section of the PDF
+ */
+function extractItemsFromSection(sectionText, isSoftwareSection) {
+  const items = [];
+
+  // Product code patterns
+  const productPatterns = [
+    /VDP-VDURACare-\d+-\w+/g,
+    /VDP-[A-Za-z0-9-]+/g,
+    /SVC-[A-Za-z0-9-]+/g,
+    /VCH-[A-Za-z0-9.-]+/g,
+    /HW-[A-Za-z0-9-]+/g
+  ];
+
+  // Find all product codes in this section
+  const allCodes = new Set();
+  for (const pattern of productPatterns) {
+    const matches = sectionText.matchAll(pattern);
+    for (const match of matches) {
+      // Skip if it's a child product code pattern we add ourselves
+      if (!match[0].startsWith('HW-Support')) {
+        allCodes.add(match[0]);
+      }
+    }
+  }
+
+  // For each product code, extract its row data
+  for (const code of allCodes) {
+    const item = extractItemData(sectionText, code, isSoftwareSection);
+    if (item) {
+      items.push(item);
+    }
+  }
+
+  return items;
+}
+
+/**
+ * Extract data for a specific product code
+ */
+function extractItemData(text, productCode, isSoftwareSection) {
+  // Escape special regex characters in product code
+  const escapedCode = productCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  // Find the line containing this product code and extract numbers after it
+  // Pattern: ProductCode Description QTY [MONTHS] $ListPrice $DiscountPrice $ExtendedPrice
+
+  // Get text starting from this product code
+  const codeIndex = text.indexOf(productCode);
+  if (codeIndex === -1) return null;
+
+  // Get a chunk of text after the product code (enough to capture the row data)
+  const chunk = text.substring(codeIndex, codeIndex + 500);
+
+  // Extract description - text between product code and the first number
+  let description = '';
+  const descMatch = chunk.match(new RegExp(`^${escapedCode}\\s+(.+?)(?=\\s+\\d+\\s+)`));
+  if (descMatch) {
+    description = descMatch[1].trim()
+      .replace(/\s+/g, ' ')
+      .replace(/PART NO\..*/i, '')
+      .replace(/DESCRIPTION.*/i, '')
+      .trim();
+  }
+
+  // Extract all numbers and currency values from the chunk
+  // Look for pattern: QTY [MONTHS] $LIST $DISCOUNT $EXTENDED
+  const numbers = [];
+  const numPattern = /(\d+)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/;
+  const numMatch = chunk.match(numPattern);
+
+  if (numMatch) {
+    // Has months: QTY MONTHS LIST DISCOUNT EXTENDED
+    return {
+      partNo: productCode,
+      description: description || productCode,
+      qty: parseInt(numMatch[1]),
+      months: parseInt(numMatch[2]),
+      listPrice: parseCurrency(numMatch[3]),
+      discountPrice: parseCurrency(numMatch[4]),
+      extendedPrice: parseCurrency(numMatch[5])
+    };
+  }
+
+  // Try without months: QTY $LIST $DISCOUNT $EXTENDED
+  const numPatternNoMonths = /(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/;
+  const numMatchNoMonths = chunk.match(numPatternNoMonths);
+
+  if (numMatchNoMonths) {
+    return {
+      partNo: productCode,
+      description: description || productCode,
+      qty: parseInt(numMatchNoMonths[1]),
+      months: null,
+      listPrice: parseCurrency(numMatchNoMonths[2]),
+      discountPrice: parseCurrency(numMatchNoMonths[3]),
+      extendedPrice: parseCurrency(numMatchNoMonths[4])
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Alternative: Parse using known PDF structure
+ * This is more reliable for the specific VDURA format
  */
 export function extractLineItemsStructured(text) {
   const items = [];
 
-  // Split text into lines and look for product code patterns
-  const lines = text.split(/[\n\r]+/);
+  // Known product codes from VDURA quotations
+  // We'll search for each pattern and extract the associated data
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  // VDURACare items (software subscription with months)
+  const vduraCarePattern = /(VDP-VDURACare-\d+-\w+)\s+(.+?)\s+(\d+)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/g;
+  let match;
 
-    // Check if line contains a product code
-    const codeMatch = line.match(/\b(VDP-[A-Za-z0-9-]+|VCH-[A-Za-z0-9-]+|SVC-[A-Za-z0-9-]+|HW-[A-Za-z0-9-]+)\b/);
-
-    if (codeMatch) {
-      const code = codeMatch[1];
-
-      // Extract numbers from this line and potentially the next few lines
-      const textToSearch = lines.slice(i, i + 3).join(' ');
-      const numbersPattern = /\$?([\d,]+\.?\d*)/g;
-      const numbers = [];
-      let numMatch;
-
-      while ((numMatch = numbersPattern.exec(textToSearch)) !== null) {
-        const val = parseFloat(numMatch[1].replace(/,/g, ''));
-        if (!isNaN(val) && val > 0) {
-          numbers.push(val);
-        }
-      }
-
-      if (numbers.length >= 4) {
-        // Try to extract description
-        const afterCode = textToSearch.substring(textToSearch.indexOf(code) + code.length);
-        const descMatch = afterCode.match(/^[\s,]*([^$\d]*?)(?=\s*[\d$])/);
-        const description = descMatch ? descMatch[1].trim() : code;
-
-        const isSubscription = code.includes('VDURACare');
-
-        let item;
-        if (isSubscription && numbers.length >= 5) {
-          item = {
-            partNo: code,
-            description: description,
-            qty: numbers[0],
-            months: numbers[1],
-            listPrice: numbers[2],
-            discountPrice: numbers[3],
-            extendedPrice: numbers[4]
-          };
-        } else {
-          item = {
-            partNo: code,
-            description: description,
-            qty: numbers[0],
-            months: null,
-            listPrice: numbers[1],
-            discountPrice: numbers[2],
-            extendedPrice: numbers[3]
-          };
-        }
-
-        items.push(item);
-      }
-    }
+  while ((match = vduraCarePattern.exec(text)) !== null) {
+    items.push({
+      partNo: match[1],
+      description: match[2].trim(),
+      qty: parseInt(match[3]),
+      months: parseInt(match[4]),
+      listPrice: parseCurrency(match[5]),
+      discountPrice: parseCurrency(match[6]),
+      extendedPrice: parseCurrency(match[7])
+    });
   }
 
-  // Remove duplicates
-  const seen = new Set();
-  return items.filter(item => {
-    const key = `${item.partNo}-${item.qty}-${item.extendedPrice}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  // Service items (may or may not have months)
+  const svcPattern = /(SVC-[A-Za-z0-9-]+)\s+(.+?)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/g;
+  while ((match = svcPattern.exec(text)) !== null) {
+    items.push({
+      partNo: match[1],
+      description: match[2].trim(),
+      qty: parseInt(match[3]),
+      months: null,
+      listPrice: parseCurrency(match[4]),
+      discountPrice: parseCurrency(match[5]),
+      extendedPrice: parseCurrency(match[6])
+    });
+  }
+
+  // Hardware items (no months)
+  const vchPattern = /(VCH-[A-Za-z0-9.-]+)\s+(.+?)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/g;
+  while ((match = vchPattern.exec(text)) !== null) {
+    items.push({
+      partNo: match[1],
+      description: match[2].trim(),
+      qty: parseInt(match[3]),
+      months: null,
+      listPrice: parseCurrency(match[4]),
+      discountPrice: parseCurrency(match[5]),
+      extendedPrice: parseCurrency(match[6])
+    });
+  }
+
+  return items;
 }
