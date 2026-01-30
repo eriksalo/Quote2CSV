@@ -13,18 +13,29 @@ function normalizePdfText(text) {
   // Fix spaces around hyphens in product codes (VDP - VDURACare - 10 - HP -> VDP-VDURACare-10-HP)
   normalized = normalized.replace(/(\w)\s+-\s+(\w)/g, '$1-$2');
 
-  // Fix split numbers (2 3 -> 23, 202 6 -> 2026)
-  normalized = normalized.replace(/(\d)\s+(\d)/g, '$1$2');
+  // Fix split year numbers only (202 6 -> 2026) - 4 digit years
+  normalized = normalized.replace(/(\d{3})\s+(\d{1})(?!\d)/g, '$1$2');
+
+  // Fix split day numbers in dates (2 3 , -> 23,)
+  normalized = normalized.replace(/(\d)\s+(\d)\s*,/g, '$1$2,');
 
   // Fix common split words
-  normalized = normalized.replace(/Quot\s+ation/gi, 'Quotation');
-  normalized = normalized.replace(/Com\s+pany/gi, 'Company');
-  normalized = normalized.replace(/cwalle\s*rt/gi, 'cwallert');
-  normalized = normalized.replace(/Q\s+TY/gi, 'QTY');
+  normalized = normalized.replace(/Quot\s*ation/gi, 'Quotation');
+  normalized = normalized.replace(/Com\s*pany/gi, 'Company');
+  normalized = normalized.replace(/Q\s*TY/gi, 'QTY');
   normalized = normalized.replace(/VDURA\s+Care/gi, 'VDURA Care');
+  normalized = normalized.replace(/Phy\s*sical/gi, 'Physical');
+  normalized = normalized.replace(/Sub\s*scription/gi, 'Subscription');
+  normalized = normalized.replace(/Sup\s*port/gi, 'Support');
+  normalized = normalized.replace(/Soft\s*ware/gi, 'Software');
+  normalized = normalized.replace(/Dis\s*counted/gi, 'Discounted');
+  normalized = normalized.replace(/Ex\s*tended/gi, 'Extended');
 
   // Fix split email addresses (xxx @ yyy -> xxx@yyy)
-  normalized = normalized.replace(/(\S+)\s+@\s+(\S+)/g, '$1@$2');
+  normalized = normalized.replace(/(\S+)\s*@\s*(\S+)/g, '$1@$2');
+
+  // Fix split currency ($ 500 -> $500)
+  normalized = normalized.replace(/\$\s+(\d)/g, '$$1');
 
   // Normalize multiple spaces to single space
   normalized = normalized.replace(/\s+/g, ' ');
@@ -38,9 +49,12 @@ function normalizePdfText(text) {
 function parseDate(dateStr) {
   if (!dateStr) return '';
 
+  // Clean up any remaining split numbers in date
+  let cleaned = dateStr.replace(/(\d)\s+(\d)/g, '$1$2');
+
   // If already in MM/DD/YYYY format
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(dateStr)) {
-    return dateStr;
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(cleaned)) {
+    return cleaned;
   }
 
   // Month name mappings (full and abbreviated)
@@ -60,7 +74,7 @@ function parseDate(dateStr) {
   };
 
   // Parse "January 30, 2026" or "Jan 23, 2026" format
-  const match = dateStr.match(/(\w+)\s*(\d{1,2})\s*,?\s*(\d{4})/i);
+  const match = cleaned.match(/(\w+)\s*(\d{1,2})\s*,?\s*(\d{4})/i);
   if (match) {
     const month = months[match[1].toLowerCase()] || '01';
     const day = match[2].padStart(2, '0');
@@ -76,7 +90,9 @@ function parseDate(dateStr) {
  */
 function parseCurrency(str) {
   if (!str) return 0;
-  return parseFloat(str.replace(/[$,]/g, '')) || 0;
+  // Remove $ and commas, handle spaces
+  const cleaned = str.replace(/[$,\s]/g, '');
+  return parseFloat(cleaned) || 0;
 }
 
 /**
@@ -140,7 +156,6 @@ export function extractHeader(text) {
     header.email = emailMatch[1];
   }
 
-  console.log('Normalized text sample:', normalized.substring(0, 500));
   console.log('Parsed header:', header);
 
   return header;
@@ -165,63 +180,76 @@ export function extractLineItems(text) {
   const items = [];
   const normalized = normalizePdfText(text);
 
-  console.log('=== NORMALIZED TEXT (first 1500 chars) ===');
-  console.log(normalized.substring(0, 1500));
+  console.log('=== NORMALIZED TEXT (first 2000 chars) ===');
+  console.log(normalized.substring(0, 2000));
 
   // ============================================
   // VDURACare items - HAVE months
-  // Pattern: VDP-VDURACare-10-HP description 21 60 $500.00 $90.00 $113,400.00
+  // Pattern: VDP-VDURACare-10-HP description QTY MONTHS $LIST $DISCOUNT $EXTENDED
   // ============================================
-  const vduraCarePattern = /VDP-VDURACare-(\d+)-([A-Z]+)\s+(.+?)\s+(\d+)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/gi;
+  // More flexible pattern that handles various spacing
+  const vduraCarePattern = /(VDP-VDURACare-\d+-[A-Z]+)\s+(.+?)\s+(\d+)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/gi;
   let match;
+  const seenVduraCare = new Set();
 
   while ((match = vduraCarePattern.exec(normalized)) !== null) {
-    const code = `VDP-VDURACare-${match[1]}-${match[2]}`;
-    console.log('Found VDURACare:', code, 'QTY:', match[4], 'MONTHS:', match[5]);
-    items.push({
-      partNo: code,
-      description: cleanDescription(match[3]),
-      qty: parseInt(match[4]),
-      months: parseInt(match[5]),
-      listPrice: parseCurrency(match[6]),
-      discountPrice: parseCurrency(match[7]),
-      extendedPrice: parseCurrency(match[8])
-    });
+    const code = match[1];
+    const itemKey = `${code}-${match[3]}-${match[4]}`;
+    if (!seenVduraCare.has(itemKey)) {
+      seenVduraCare.add(itemKey);
+      console.log('Found VDURACare:', code, 'QTY:', match[3], 'MONTHS:', match[4]);
+      items.push({
+        partNo: code,
+        description: cleanDescription(match[2]),
+        qty: parseInt(match[3]),
+        months: parseInt(match[4]),
+        listPrice: parseCurrency(match[5]),
+        discountPrice: parseCurrency(match[6]),
+        extendedPrice: parseCurrency(match[7])
+      });
+    }
   }
 
   // ============================================
   // Service items (SVC-*) - NO months
-  // Pattern: SVC-R1-CINT-PDEP-NORACK description 1 $15,180.00 $7,590.00 $7,590.00
+  // Pattern: SVC-xxx description QTY $LIST $DISCOUNT $EXTENDED
   // ============================================
   const svcPattern = /(SVC-[A-Za-z0-9-]+)\s+(.+?)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/gi;
+  const seenSvc = new Set();
 
   while ((match = svcPattern.exec(normalized)) !== null) {
-    console.log('Found SVC:', match[1], 'QTY:', match[3]);
-    items.push({
-      partNo: match[1],
-      description: cleanDescription(match[2]),
-      qty: parseInt(match[3]),
-      months: null,
-      listPrice: parseCurrency(match[4]),
-      discountPrice: parseCurrency(match[5]),
-      extendedPrice: parseCurrency(match[6])
-    });
+    const code = match[1];
+    const itemKey = `${code}-${match[3]}-${match[6]}`;
+    if (!seenSvc.has(itemKey)) {
+      seenSvc.add(itemKey);
+      console.log('Found SVC:', code, 'QTY:', match[3]);
+      items.push({
+        partNo: code,
+        description: cleanDescription(match[2]),
+        qty: parseInt(match[3]),
+        months: null,
+        listPrice: parseCurrency(match[4]),
+        discountPrice: parseCurrency(match[5]),
+        extendedPrice: parseCurrency(match[6])
+      });
+    }
   }
 
   // ============================================
   // Hardware items (VCH-*) - NO months
-  // Pattern: VCH-5100-D1N description 3 $48,618.39 $20,969.19 $62,907.57
+  // Pattern: VCH-xxx description QTY $LIST $DISCOUNT $EXTENDED
   // ============================================
   const vchPattern = /(VCH-[A-Za-z0-9.-]+)\s+(.+?)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/gi;
   const seenVch = new Set();
 
   while ((match = vchPattern.exec(normalized)) !== null) {
-    const itemKey = `${match[1]}-${match[3]}-${match[6]}`;
+    const code = match[1];
+    const itemKey = `${code}-${match[3]}-${match[6]}`;
     if (!seenVch.has(itemKey)) {
       seenVch.add(itemKey);
-      console.log('Found VCH:', match[1], 'QTY:', match[3]);
+      console.log('Found VCH:', code, 'QTY:', match[3]);
       items.push({
-        partNo: match[1],
+        partNo: code,
         description: cleanDescription(match[2]),
         qty: parseInt(match[3]),
         months: null,
