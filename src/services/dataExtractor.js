@@ -111,154 +111,19 @@ export function extractBaseProductCode(text) {
 
 /**
  * Extract line items from the quotation table
- * This parses the specific VDURA PDF format
  */
 export function extractLineItems(text) {
   const items = [];
 
-  // The PDF has two sections:
-  // 1. SOFTWARE AND SUPPORT (items have QTY, MONTHS, LIST PRICE, DISCOUNTED PRICE, EXTENDED PRICE)
-  // 2. COMMODITY HARDWARE (items have QTY, [MONTHS optional], LIST PRICE, DISCOUNTED PRICE, EXTENDED PRICE)
-
-  // Split into software and hardware sections
-  const softwareSection = text.match(/SOFTWARE AND SUPPORT.*?(?=COMMODITY HARDWARE|Total Software)/is);
-  const hardwareSection = text.match(/COMMODITY HARDWARE.*?(?=Total Hardware|Quote Cost|Notes)/is);
-
-  if (softwareSection) {
-    const softwareItems = extractItemsFromSection(softwareSection[0], true);
-    items.push(...softwareItems);
-  }
-
-  if (hardwareSection) {
-    const hardwareItems = extractItemsFromSection(hardwareSection[0], false);
-    items.push(...hardwareItems);
-  }
-
-  return items;
-}
-
-/**
- * Extract items from a section of the PDF
- */
-function extractItemsFromSection(sectionText, isSoftwareSection) {
-  const items = [];
-
-  // Product code patterns
-  const productPatterns = [
-    /VDP-VDURACare-\d+-\w+/g,
-    /VDP-[A-Za-z0-9-]+/g,
-    /SVC-[A-Za-z0-9-]+/g,
-    /VCH-[A-Za-z0-9.-]+/g,
-    /HW-[A-Za-z0-9-]+/g
-  ];
-
-  // Find all product codes in this section
-  const allCodes = new Set();
-  for (const pattern of productPatterns) {
-    const matches = sectionText.matchAll(pattern);
-    for (const match of matches) {
-      // Skip if it's a child product code pattern we add ourselves
-      if (!match[0].startsWith('HW-Support')) {
-        allCodes.add(match[0]);
-      }
-    }
-  }
-
-  // For each product code, extract its row data
-  for (const code of allCodes) {
-    const item = extractItemData(sectionText, code, isSoftwareSection);
-    if (item) {
-      items.push(item);
-    }
-  }
-
-  return items;
-}
-
-/**
- * Extract data for a specific product code
- */
-function extractItemData(text, productCode, isSoftwareSection) {
-  // Escape special regex characters in product code
-  const escapedCode = productCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-  // Find the line containing this product code and extract numbers after it
-  // Pattern: ProductCode Description QTY [MONTHS] $ListPrice $DiscountPrice $ExtendedPrice
-
-  // Get text starting from this product code
-  const codeIndex = text.indexOf(productCode);
-  if (codeIndex === -1) return null;
-
-  // Get a chunk of text after the product code (enough to capture the row data)
-  const chunk = text.substring(codeIndex, codeIndex + 500);
-
-  // Extract description - text between product code and the first number
-  let description = '';
-  const descMatch = chunk.match(new RegExp(`^${escapedCode}\\s+(.+?)(?=\\s+\\d+\\s+)`));
-  if (descMatch) {
-    description = descMatch[1].trim()
-      .replace(/\s+/g, ' ')
-      .replace(/PART NO\..*/i, '')
-      .replace(/DESCRIPTION.*/i, '')
-      .trim();
-  }
-
-  // Extract all numbers and currency values from the chunk
-  // Look for pattern: QTY [MONTHS] $LIST $DISCOUNT $EXTENDED
-  const numbers = [];
-  const numPattern = /(\d+)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/;
-  const numMatch = chunk.match(numPattern);
-
-  if (numMatch) {
-    // Has months: QTY MONTHS LIST DISCOUNT EXTENDED
-    return {
-      partNo: productCode,
-      description: description || productCode,
-      qty: parseInt(numMatch[1]),
-      months: parseInt(numMatch[2]),
-      listPrice: parseCurrency(numMatch[3]),
-      discountPrice: parseCurrency(numMatch[4]),
-      extendedPrice: parseCurrency(numMatch[5])
-    };
-  }
-
-  // Try without months: QTY $LIST $DISCOUNT $EXTENDED
-  const numPatternNoMonths = /(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/;
-  const numMatchNoMonths = chunk.match(numPatternNoMonths);
-
-  if (numMatchNoMonths) {
-    return {
-      partNo: productCode,
-      description: description || productCode,
-      qty: parseInt(numMatchNoMonths[1]),
-      months: null,
-      listPrice: parseCurrency(numMatchNoMonths[2]),
-      discountPrice: parseCurrency(numMatchNoMonths[3]),
-      extendedPrice: parseCurrency(numMatchNoMonths[4])
-    };
-  }
-
-  return null;
-}
-
-/**
- * Alternative: Parse using known PDF structure
- * This is more reliable for the specific VDURA format
- */
-export function extractLineItemsStructured(text) {
-  const items = [];
-
-  // Known product codes from VDURA quotations
-  // We'll search for each pattern and extract the associated data
-
-  // VDURACare items (software subscription with months)
-  const vduraCarePattern = /(VDP-VDURACare-\d+-\w+)\s+(.+?)\s+(\d+)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/g;
+  // VDURACare items - these HAVE months (QTY MONTHS LIST DISCOUNT EXTENDED)
+  // Pattern: VDP-VDURACare-10-HP ... 43 36 $500.00 $80.00 $123,840.00
+  const vduraCarePattern = /(VDP-VDURACare-\d+-[A-Z]+)\s+(.+?)\s+(\d+)\s+(\d+)\s+\$([\d,]+\.?\d*)\s+\$([\d,]+\.?\d*)\s+\$([\d,]+\.?\d*)/g;
   let match;
 
   while ((match = vduraCarePattern.exec(text)) !== null) {
     items.push({
       partNo: match[1],
-      description: match[2].trim(),
+      description: cleanDescription(match[2]),
       qty: parseInt(match[3]),
       months: parseInt(match[4]),
       listPrice: parseCurrency(match[5]),
@@ -267,12 +132,14 @@ export function extractLineItemsStructured(text) {
     });
   }
 
-  // Service items (may or may not have months)
-  const svcPattern = /(SVC-[A-Za-z0-9-]+)\s+(.+?)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/g;
+  // Service items - NO months (QTY LIST DISCOUNT EXTENDED)
+  // Pattern: SVC-R1-CINT-PDEP-NORACK ... 1 $15,180.00 $7,590.00 $7,590.00
+  const svcPattern = /(SVC-[A-Za-z0-9-]+)\s+(.+?)\s+(\d+)\s+\$([\d,]+\.?\d*)\s+\$([\d,]+\.?\d*)\s+\$([\d,]+\.?\d*)/g;
+
   while ((match = svcPattern.exec(text)) !== null) {
     items.push({
       partNo: match[1],
-      description: match[2].trim(),
+      description: cleanDescription(match[2]),
       qty: parseInt(match[3]),
       months: null,
       listPrice: parseCurrency(match[4]),
@@ -281,12 +148,14 @@ export function extractLineItemsStructured(text) {
     });
   }
 
-  // Hardware items (no months)
-  const vchPattern = /(VCH-[A-Za-z0-9.-]+)\s+(.+?)\s+(\d+)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)\s+\$?([\d,]+\.?\d*)/g;
+  // Hardware items (VCH-*) - NO months (QTY LIST DISCOUNT EXTENDED)
+  // Pattern: VCH-5100-D1N ... 3 $29,955.99 $20,969.19 $62,907.57
+  const vchPattern = /(VCH-[A-Za-z0-9.-]+)\s+(.+?)\s+(\d+)\s+\$([\d,]+\.?\d*)\s+\$([\d,]+\.?\d*)\s+\$([\d,]+\.?\d*)/g;
+
   while ((match = vchPattern.exec(text)) !== null) {
     items.push({
       partNo: match[1],
-      description: match[2].trim(),
+      description: cleanDescription(match[2]),
       qty: parseInt(match[3]),
       months: null,
       listPrice: parseCurrency(match[4]),
@@ -296,4 +165,19 @@ export function extractLineItemsStructured(text) {
   }
 
   return items;
+}
+
+/**
+ * Clean up description text
+ */
+function cleanDescription(desc) {
+  return desc
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/PART NO\..*$/i, '')
+    .replace(/DESCRIPTION.*$/i, '')
+    .replace(/QTY.*$/i, '')
+    .replace(/MONTHS.*$/i, '')
+    .replace(/LIST PRICE.*$/i, '')
+    .trim();
 }
