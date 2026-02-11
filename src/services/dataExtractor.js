@@ -13,6 +13,10 @@ function normalizePdfText(text) {
   // Fix spaces around hyphens in product codes (VDP - VDURACare - 10 - HP -> VDP-VDURACare-10-HP)
   normalized = normalized.replace(/(\w)\s+-\s+(\w)/g, '$1-$2');
 
+  // Fix split alphanumeric segments in product codes (e.g., -J 78 -> -J78, -J 108 -> -J108)
+  // pdf.js sometimes splits letter-digit boundaries within hyphenated part numbers
+  normalized = normalized.replace(/(-[A-Za-z])\s+(\d)/g, '$1$2');
+
   // Fix split year numbers only (202 6 -> 2026) - 4 digit years
   normalized = normalized.replace(/(\d{3})\s+(\d{1})(?!\d)/g, '$1$2');
 
